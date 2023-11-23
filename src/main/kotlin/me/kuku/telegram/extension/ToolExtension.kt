@@ -54,7 +54,7 @@ class ToolExtension(
     }
 
     fun AbilitySubscriber.tool() {
-        sub("info", locality = Locality.ALL) {
+        sub("info", locality = Locality.ALL, privacy=Privacy.PUBLIC) {
             val id = message.chat().id()
             val messageThreadId = message.messageThreadId()
             sendMessage("""

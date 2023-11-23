@@ -23,14 +23,14 @@ class AbilitySubscriber {
     }
 
     fun sub(name: String, input: Int = 0, locality: Locality = Locality.USER,
-            privacy: Privacy = Privacy.PUBLIC, block: AbilityContextBody
+            privacy: Privacy = Privacy.ADMIN, block: AbilityContextBody
     ) {
         val ability = ability(name, input, locality, privacy, block)
         abilityMap[name] = ability
     }
 
     fun userSub(name: String, input: Int = 0, locality: Locality = Locality.USER,
-                privacy: Privacy = Privacy.PUBLIC, block: AbilityContextBody
+                privacy: Privacy = Privacy.ADMIN, block: AbilityContextBody
     ) {
         val ability = ability(name, input, locality, privacy, block)
         abilityMap[name] = ability
