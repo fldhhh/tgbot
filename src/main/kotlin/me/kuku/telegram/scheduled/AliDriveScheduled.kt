@@ -1,7 +1,10 @@
 package me.kuku.telegram.scheduled
 
+import com.pengrad.telegrambot.TelegramBot
 import kotlinx.coroutines.delay
+import me.kuku.telegram.context.sendTextMessage
 import me.kuku.telegram.entity.*
+import me.kuku.telegram.logic.AliDriveBatch
 import me.kuku.telegram.logic.AliDriveLogic
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
@@ -12,7 +15,8 @@ import java.time.LocalDate
 class AliDriveScheduled(
     private val aliDriveLogic: AliDriveLogic,
     private val aliDriveService: AliDriveService,
-    private val logService: LogService
+    private val logService: LogService,
+    private val telegramBot: TelegramBot
 ) {
 
     @Scheduled(cron = "13 9 2 * * ?")
@@ -82,12 +86,25 @@ class AliDriveScheduled(
 
     @Scheduled(cron = "43 30 4 * * ?")
     suspend fun receiveTodayTask() {
-        val list = aliDriveService.findByReceiveTask(Status.ON)
+        val list = aliDriveService.findByTask(Status.ON)
         for (aliDriveEntity in list) {
-            logService.log(aliDriveEntity.tgId, LogType.AliDriveReceiveTaskToday) {
+            kotlin.runCatching {
                 delay(3000)
-                aliDriveLogic.signInList(aliDriveEntity)
-                show = aliDriveLogic.receiveTask(aliDriveEntity)
+                val signInInfo = aliDriveLogic.signInInfo(aliDriveEntity)
+                val reward = signInInfo.rewards[1]
+                if (reward.status !in listOf("finished", "verification")) {
+                    error("阿里云盘任务完成失败，任务名称：${reward.remind}")
+                }
+            }.onSuccess {
+                logService.log(aliDriveEntity.tgId, LogType.AliDriveReceiveTaskToday) {
+                    aliDriveLogic.signInList(aliDriveEntity)
+                    if (aliDriveEntity.receiveTask == Status.ON) {
+                        show = aliDriveLogic.receiveTask(aliDriveEntity)
+                    }
+                }
+            }.onFailure {
+                telegramBot.sendTextMessage(aliDriveEntity.tgId,
+                    "#阿里云盘任务检测\n${it.message}")
             }
         }
     }
@@ -127,6 +144,20 @@ class AliDriveScheduled(
             delay(3000)
             logService.log(aliDriveEntity.tgId, LogType.AliDriveCard) {
                 aliDriveLogic.finishCard(aliDriveEntity)
+            }
+        }
+    }
+
+    @Scheduled(cron = "10 21 1 * * ?")
+    suspend fun clearRubbish() {
+        val list = aliDriveService.findAll().filter { it.uploads.isNotEmpty() }
+        for (aliDriveEntity in list) {
+            delay(3000)
+            runCatching {
+                aliDriveLogic.batchDeleteFile(aliDriveEntity, aliDriveEntity.uploads
+                    .map { AliDriveBatch.DeleteFileBody(it.driveId.toString(), it.fileId) })
+                aliDriveEntity.uploads.clear()
+                aliDriveService.save(aliDriveEntity)
             }
         }
     }
