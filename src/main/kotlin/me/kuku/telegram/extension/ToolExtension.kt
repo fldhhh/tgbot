@@ -81,7 +81,7 @@ class ToolExtension(
             val url = jsonNode["data"][0]["urls"]["original"].asText()
             val bytes = OkHttpKtUtils.getBytes(url)
             if (bytes.size > 1024 * 10 * 1024) {
-                val sendDocument = SendDocument(chatId, bytes)
+                val sendDocument = SendDocument(chatId, bytes).fileName("lolicon.jpg")
                 message.messageThreadId()?.let {
                     sendDocument.messageThreadId(it)
                 }
@@ -136,23 +136,24 @@ class ToolExtension(
     }
 
     fun AbilitySubscriber.dyna() {
-        sub("bv", input = 1) {
+        sub("bv", input = 1, locality = Locality.ALL) {
             mutex.withLock {
                 val biliBiliEntity = biliBiliService.findByTgId(tgId)
-                    ?: errorAnswerCallbackQuery("未绑定哔哩哔哩，无法获取视频")
+                    ?: biliBiliService.findAll().randomOrNull() ?: errorAnswerCallbackQuery("未绑定哔哩哔哩，无法获取视频")
                 val bvId = firstArg()
                 val file = BiliBiliLogic.videoByBvId(biliBiliEntity, bvId)
                 if (file.length() > 1024 * 1024 * 1024 * 2L) {
                     sendMessage("该视频大于2G，无法发送")
                 } else {
                     val sendVideo =
-                        SendVideo(tgId, file).caption(bvId)
+                        SendVideo(chatId, file).caption(bvId)
+                    messageThreadId?.let { sendVideo.messageThreadId(it) }
                     bot.execute(sendVideo)
                 }
                 file.delete()
             }
         }
-        sub("x", 1) {
+        sub("x", 1, locality = Locality.ALL) {
             mutex.withLock {
                 val id = try {
                     firstArg().toLong()
@@ -166,17 +167,18 @@ class ToolExtension(
                 try {
                     if (videoUrl.isNotEmpty()) {
                         client.get(videoUrl).body<ByteArray>().let {
-                            val sendVideo = SendVideo(tgId, it).fileName("${twitterPojo.id}.mp4")
+                            val sendVideo = SendVideo(chatId, it).fileName("${twitterPojo.id}.mp4")
                                 .caption(text)
+                            messageThreadId?.let { id -> sendVideo.messageThreadId(id) }
                             bot.execute(sendVideo)
                         }
                     } else if (twitterPojo.photoList.isNotEmpty() || twitterPojo.forwardPhotoList.isNotEmpty()) {
                         val imageList = twitterPojo.photoList
                         imageList.addAll(twitterPojo.forwardPhotoList)
-                        bot.sendPic(tgId, text, imageList)
-                    } else bot.sendTextMessage(tgId, text)
+                        bot.sendPic(chatId, text, imageList, messageThreadId)
+                    } else bot.sendTextMessage(chatId, text, messageThreadId)
                 } catch (e: Exception) {
-                    bot.sendTextMessage(tgId, text)
+                    bot.sendTextMessage(chatId, text, messageThreadId)
                 }
             }
         }
