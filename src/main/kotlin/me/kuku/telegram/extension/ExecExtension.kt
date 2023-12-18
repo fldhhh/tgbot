@@ -159,7 +159,8 @@ class ExecExtension(
         before { set(miHoYoService.findByTgId(tgId) ?: errorAnswerCallbackQuery("未绑定米哈游账号")) }
         callback("miHoYoExec") {
             val genShinSignButton = InlineKeyboardButton("原神签到").callbackData("genShinSign")
-            val markup = InlineKeyboardMarkup(arrayOf(genShinSignButton))
+            val mysSign = InlineKeyboardButton("米游社签到").callbackData("mysSign")
+            val markup = InlineKeyboardMarkup(arrayOf(genShinSignButton), arrayOf(mysSign))
             editMessageText("""
                 米哈游
                 注意：原神签到可能需要在/config配置rrcor的key
@@ -169,6 +170,10 @@ class ExecExtension(
             miHoYoLogic.sign(firstArg(), tgId)
             editMessageText("原神签到成功")
         }
+        callback("mysSign") {
+            miHoYoLogic.mysSign(firstArg())
+            editMessageText("米游社区签到成功")
+        }
     }
 
     fun TelegramSubscribe.netEaseExec() {
@@ -177,10 +182,12 @@ class ExecExtension(
             val netEaseSignButton = InlineKeyboardButton("签到").callbackData("netEaseSign")
             val netEaseMusicianSignButton = InlineKeyboardButton("音乐人签到").callbackData("netEaseMusicianSign")
             val netEaseMusicianMyComment = InlineKeyboardButton("发布主创说").callbackData("netEaseMusicianMyComment")
+            val vipSign = inlineKeyboardButton("vip签到", "netEaseVipSign")
             val markup = InlineKeyboardMarkup(
                 arrayOf(netEaseSignButton),
                 arrayOf(netEaseMusicianSignButton),
-                arrayOf(netEaseMusicianMyComment)
+                arrayOf(netEaseMusicianMyComment),
+                arrayOf(vipSign)
             )
             editMessageText("网易云音乐", markup)
         }
@@ -215,6 +222,11 @@ class ExecExtension(
         callback("netEaseMusicianMyComment") {
             NetEaseLogic.myMusicComment(firstArg())
             editMessageText("发布主创说成功")
+        }
+        callback("netEaseVipSign") {
+            NetEaseLogic.vipSign(firstArg())
+            NetEaseLogic.receiveTaskReward(firstArg())
+            editMessageText("网易云音乐vip签到成功")
         }
     }
 
@@ -367,8 +379,15 @@ class ExecExtension(
         }
         callbackStartsWith("nodeSeekSign-") {
             val random = query.data().split("-")[1].toInt() == 1
-            val num = NodeSeekLogic.sign(firstArg(), random)
-            editMessageText("NodeSeek签到成功，获得鸡腿${num}个")
+            NodeSeekLogic.sign(firstArg(), random)
+            editMessageText("NodeSeek签到中，稍后为您自动查询结果")
+            delay(1000 * 60 * 2)
+            kotlin.runCatching {
+                val gain = NodeSeekLogic.querySign(firstArg())
+                sendMessage("#手动执行结果\nNodeSeek签到成功，获得${gain}鸡腿")
+            }.onFailure {
+                sendMessage("#手动执行结果\nNodeSeek签到失败，${it.message}")
+            }
         }
     }
 

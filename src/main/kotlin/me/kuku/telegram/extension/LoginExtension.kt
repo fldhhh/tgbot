@@ -322,21 +322,27 @@ class LoginExtension(
         }
     }
 
+    @Suppress("DuplicatedCode")
     fun TelegramSubscribe.miHoYoLogin(){
         callback("miHoYoLogin") {
             editMessageText("请选择登录米哈游的方式", InlineKeyboardMarkup(
                 arrayOf(inlineKeyboardButton("使用cookie登录", "miHoYoCookieLogin")),
                 arrayOf(inlineKeyboardButton("使用米游社app扫码登陆", "miHoYoQrcodeLogin")),
-                arrayOf(inlineKeyboardButton("使用账号密码登录", "miHoYoAccountLogin"))
+                arrayOf(inlineKeyboardButton("使用app账号密码登录", "miHoYoAppPasswordLogin")),
+                arrayOf(inlineKeyboardButton("使用web账号密码登录", "miHoYoWebPasswordLogin"))
             ))
         }
         callback("miHoYoCookieLogin") {
             editMessageText("请发送米哈游的cookie")
             val cookie = nextMessage().text()
+            val ticket = OkUtils.cookie(cookie, "login_ticket") ?: ""
+            val accountId = OkUtils.cookie(cookie, "account_id") ?: ""
             val newEntity = miHoYoService.findByTgId(tgId) ?: MiHoYoEntity().also {
                 it.tgId = tgId
             }
             newEntity.cookie = cookie
+            newEntity.ticket = ticket
+            newEntity.aid = accountId
             miHoYoService.save(newEntity)
             editMessageText("绑定米哈游成功")
         }
@@ -375,20 +381,41 @@ class LoginExtension(
                 photoMessage?.delete()
             }
         }
-        callback("miHoYoAccountLogin") {
+        callback("miHoYoAppPasswordLogin") {
             editMessageText("请发送账号")
             val account = nextMessage().text()
             editMessageText("请发送密码")
             val password = nextMessage().text()
-            val result = miHoYoLogic.login(account, password)
-            if (result.success()) {
-                val newEntity = miHoYoService.findByTgId(tgId) ?: MiHoYoEntity().also {
-                    it.tgId = tgId
-                }
-                newEntity.cookie = result.data().cookie
-                miHoYoService.save(newEntity)
-                editMessageText("绑定米哈游成功")
-            } else editMessageText(result.message)
+            val entity = miHoYoLogic.login(account, password)
+            val newEntity = miHoYoService.findByTgId(tgId) ?: MiHoYoEntity().also {
+                it.tgId = tgId
+            }
+            newEntity.aid = entity.aid
+            newEntity.mid = entity.mid
+            newEntity.token = entity.token
+            newEntity.ticket = entity.ticket
+            newEntity.fix = entity.fix
+            newEntity.sToken = entity.sToken
+            miHoYoService.save(newEntity)
+            editMessageText("绑定米哈游成功")
+        }
+        callback("miHoYoWebPasswordLogin") {
+            editMessageText("请发送账号")
+            val account = nextMessage().text()
+            editMessageText("请发送密码")
+            val password = nextMessage().text()
+            val entity = miHoYoLogic.webLogin(account, password, tgId)
+            val newEntity = miHoYoService.findByTgId(tgId) ?: MiHoYoEntity().also {
+                it.tgId = tgId
+            }
+            newEntity.aid = entity.aid
+            newEntity.token = entity.token
+            newEntity.ticket = entity.ticket
+            newEntity.fix = entity.fix
+            newEntity.cookie = entity.cookie
+            newEntity.sToken = entity.sToken
+            miHoYoService.save(newEntity)
+            editMessageText("绑定米哈游成功")
         }
     }
 
@@ -707,7 +734,7 @@ class LoginExtension(
         callback("smZdmLoginByPhoneCode") {
             editMessageText("请发送什么值得买的手机号码")
             val phone = nextMessage().text()
-            smZdmLogic.login1(phone, tgId)
+            smZdmLogic.login1(phone)
             editMessageText("请发送什么值得买的验证码")
             val code = nextMessage().text()
             val newEntity = smZdmLogic.login2(phone, code)

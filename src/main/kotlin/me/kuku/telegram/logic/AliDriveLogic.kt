@@ -245,11 +245,14 @@ class AliDriveLogic(
         } else error(jsonNode["code"].asText())
     }
 
-    suspend fun signInInfo(aliDriveEntity: AliDriveEntity): AliDriveSignInInfo {
+    suspend fun signInInfo(aliDriveEntity: AliDriveEntity, aliDriveDevice: AliDriveDevice? = null): AliDriveSignInInfo {
         val jsonNode = client.post("https://member.aliyundrive.com/v2/activity/sign_in_info") {
             setJsonBody("{}")
             aliDriveEntity.appendAuth()
-            aliDriveEntity.appendBackupDeviceEncrypt()
+            if (aliDriveDevice == null)
+                aliDriveEntity.appendBackupDeviceEncrypt()
+            else
+                aliDriveEntity.appendEncrypt(aliDriveDevice)
         }.body<JsonNode>()
         jsonNode.check()
         return jsonNode["result"].convertValue()
@@ -814,7 +817,7 @@ class AliDriveLogic(
             }
             "开启「自动同步电脑文件夹至少一小时」" -> {
                 backupDesktop(aliDriveEntity)
-                signInInfo(aliDriveEntity)
+                signInInfo(aliDriveEntity, backupDesktopDevice(aliDriveEntity))
             }
             else -> error("不支持的任务，${reward.remind}")
         }
@@ -878,17 +881,21 @@ class AliDriveLogic(
         jsonNode.check()
     }
 
+    fun backupDesktopDevice(aliDriveEntity: AliDriveEntity): AliDriveDevice {
+        return AliDriveDevice().also {
+            it.deviceId = aliDriveEntity.backupDesktopDeviceId
+            it.deviceName = "kuku's PC"
+            it.deviceModel = "Windows客户端"
+            it.desktop = true
+        }
+    }
+
     suspend fun backupDesktop(aliDriveEntity: AliDriveEntity, status: Boolean = true) {
         var backupDesktopDeviceId = aliDriveEntity.backupDesktopDeviceId
         if (backupDesktopDeviceId.isEmpty()) backupDesktopDeviceId = UUID.randomUUID().toString()
         aliDriveEntity.backupDesktopDeviceId = backupDesktopDeviceId
         aliDriveService.save(aliDriveEntity)
-        val aliDriveDevice = AliDriveDevice().also {
-            it.deviceId = backupDesktopDeviceId
-            it.deviceName = "kuku's PC"
-            it.deviceModel = "Windows客户端"
-            it.desktop = true
-        }
+        val aliDriveDevice = backupDesktopDevice(aliDriveEntity)
         val jsonNode = client.post("https://api.aliyundrive.com/users/v1/users/update_device_extras") {
             setJsonBody("""
                 {"autoBackupStatus":$status}
@@ -1106,6 +1113,12 @@ class AliDriveLogic(
         val task = cardDetail.tasks.find { map[it.taskName] != null }
             ?: error("不支持的任务，${cardDetail.tasks.joinToString(",") { it.taskName }}")
         map[task.taskName]!!.invoke(aliDriveEntity)
+        cardAward(aliDriveEntity, cardDetail.period, task.taskId)
+    }
+
+    suspend fun receiveCard(aliDriveEntity: AliDriveEntity) {
+        val cardDetail = cardDetail(aliDriveEntity)
+        val task = cardDetail.tasks.find { it.status == "finished" } ?: error("未完成补签卡任务，领取补签卡失败")
         cardAward(aliDriveEntity, cardDetail.period, task.taskId)
     }
 

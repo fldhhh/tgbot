@@ -2,13 +2,12 @@ package me.kuku.telegram.config
 
 import com.pengrad.telegrambot.TelegramBot
 import com.pengrad.telegrambot.UpdatesListener
-import com.pengrad.telegrambot.model.Update
 import jakarta.annotation.PostConstruct
 import kotlinx.coroutines.runBlocking
 import me.kuku.telegram.context.*
+import me.kuku.telegram.utils.SpringUtils
 import okhttp3.OkHttpClient
 import org.springframework.boot.context.properties.ConfigurationProperties
-import org.springframework.context.ApplicationEvent
 import org.springframework.context.ApplicationListener
 import org.springframework.context.annotation.Bean
 import org.springframework.context.event.ContextRefreshedEvent
@@ -88,7 +87,6 @@ class TelegramBean(
         val telegramBot = applicationContext.getBean(TelegramBot::class.java)
         telegramBot.setUpdatesListener {
             for (update in it) {
-                applicationContext.publishEvent(TelegramUpdateEvent(update))
                 Thread.startVirtualThread {
                     runBlocking {
                         for (function in updateFunction) {
@@ -134,8 +132,6 @@ class TelegramBean(
 }
 val telegramExceptionHandler = TelegramExceptionHandler()
 
-class TelegramUpdateEvent(val update: Update): ApplicationEvent(update)
-
 @Component
 @ConfigurationProperties(prefix = "kuku.telegram")
 class TelegramConfig {
@@ -146,6 +142,7 @@ class TelegramConfig {
     var proxyType: Proxy.Type = Proxy.Type.DIRECT
     var url: String = ""
     var localPath: String = ""
+    var api: String = ""
 
     @PostConstruct
     fun dockerInit() {
@@ -172,9 +169,14 @@ class TelegramConfig {
                     "KUKU_TELEGRAM_PROXY_TYPE" -> proxyType = Proxy.Type.valueOf(value.uppercase())
                     "KUKU_TELEGRAM_URL" -> url = value
                     "KUKU_LOCAL_PATH" -> localPath = value
+                    "KUKU_API" -> api = value
                 }
             }
         }
     }
 }
 
+val api: String by lazy {
+    val api = SpringUtils.getBean<TelegramConfig>().api
+    api.ifEmpty { "https://api.jpa.cc" }
+}
