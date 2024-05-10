@@ -1,5 +1,3 @@
-@file:Suppress("SpringDataRepositoryMethodReturnTypeInspection")
-
 package me.kuku.telegram.entity
 
 import org.springframework.data.annotation.Id
@@ -8,21 +6,20 @@ import org.springframework.data.repository.kotlin.CoroutineCrudRepository
 import org.springframework.stereotype.Service
 
 @Document("sm_zdm")
-class SmZdmEntity {
+class SmZdmEntity: BaseEntity() {
     @Id
     var id: String? = null
-    var tgId: Long = 0
     var cookie: String = ""
     var sign: Status = Status.OFF
 }
 
 interface SmZdmRepository: CoroutineCrudRepository<SmZdmEntity, String> {
 
-    suspend fun findByTgId(tgId: Long): SmZdmEntity?
+    suspend fun findByTgIdAndTgName(tgId: Long, tgName: String?): SmZdmEntity?
 
     suspend fun findBySign(sign: Status): List<SmZdmEntity>
 
-    suspend fun deleteByTgId(tgId: Long)
+    suspend fun deleteByTgIdAndTgName(tgId: Long, tgName: String?)
 
 }
 
@@ -31,7 +28,7 @@ class SmZdmService(
     private val smZdmRepository: SmZdmRepository
 ) {
 
-    suspend fun findByTgId(tgId: Long) = smZdmRepository.findByTgId(tgId)
+    suspend fun findByTgId(tgId: Long) = smZdmRepository.findEnableEntityByTgId(tgId) as? SmZdmEntity
 
     suspend fun save(smZdmEntity: SmZdmEntity) = smZdmRepository.save(smZdmEntity)
 
@@ -39,6 +36,6 @@ class SmZdmService(
 
     suspend fun findBySign(sign: Status) = smZdmRepository.findBySign(sign)
 
-    suspend fun deleteByTgId(tgId: Long) = smZdmRepository.deleteByTgId(tgId)
+    suspend fun deleteByTgId(tgId: Long) = smZdmRepository.deleteEnableEntityByTgId(tgId)
 
 }

@@ -106,7 +106,7 @@ class ExecExtension(
         }
         callback("biliBiliSign") {
             val biliBiliEntity = firstArg<BiliBiliEntity>()
-            val firstRank = BiliBiliLogic.ranking()[0]
+            val firstRank = BiliBiliLogic.ranking(biliBiliEntity)[0]
             BiliBiliLogic.watchVideo(biliBiliEntity, firstRank)
             delay(1000)
             BiliBiliLogic.share(biliBiliEntity, firstRank.aid)
@@ -209,7 +209,7 @@ class ExecExtension(
             val netEaseEntity = firstArg<NetEaseEntity>()
             NetEaseLogic.musicianSign(netEaseEntity)
             delay(3000)
-            NetEaseLogic.shareMySongAndComment(netEaseEntity)
+            NetEaseLogic.publishAndShareMySongAndComment(netEaseEntity)
             editMessageText("网易云音乐人每日任务完成成功")
         }
         callback("netEaseVipSign") {

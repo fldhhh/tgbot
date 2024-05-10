@@ -6,6 +6,7 @@ import com.pengrad.telegrambot.request.SendPhoto
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import kotlinx.coroutines.delay
+import me.kuku.telegram.context.asyncExecute
 import me.kuku.telegram.entity.*
 import me.kuku.telegram.logic.DouYuFish
 import me.kuku.telegram.logic.DouYuLogic
@@ -55,9 +56,9 @@ class DouYuScheduled(
                             client.get(imageUrl).body<ByteArray>().let {
                                 val sendPhoto = SendPhoto(tgId, it)
                                     .caption(text).fileName("douYuRoom.jpg")
-                                telegramBot.execute(sendPhoto)
+                                telegramBot.asyncExecute(sendPhoto)
                             }
-                        } else telegramBot.execute(SendMessage(tgId, text))
+                        } else telegramBot.asyncExecute(SendMessage(tgId, text))
                     }
                 } else map[id] = b
             }
@@ -85,7 +86,7 @@ class DouYuScheduled(
                         client.get(imageUrl).body<ByteArray>().let {
                             val sendPhoto = SendPhoto(tgId.toString(), it).fileName("douYuRoom.jpg")
                                 .caption(text)
-                            telegramBot.execute(sendPhoto)
+                            telegramBot.asyncExecute(sendPhoto)
                         }
                     } else telegramBot.sendTextMessage(tgId, text)
                 }
@@ -98,7 +99,7 @@ class DouYuScheduled(
     suspend fun douYuSign() {
         val list = douYuService.findByFishGroup(Status.ON)
         for (douYuEntity in list) {
-            logService.log(douYuEntity.tgId, LogType.DouYu) {
+            logService.log(douYuEntity, LogType.DouYu) {
                 delay(3000)
                 val cookie = douYuEntity.cookie
                 if (cookie.isNotEmpty()) douYuLogic.fishGroup(douYuEntity)
@@ -128,7 +129,7 @@ class DouYuScheduled(
                             telegramBot.sendPic(tgId, text, douYuFish.image)
                         }
                     } else {
-                        telegramBot.execute(SendMessage(tgId, text))
+                        telegramBot.asyncExecute(SendMessage(tgId, text))
                     }
                 }
             }

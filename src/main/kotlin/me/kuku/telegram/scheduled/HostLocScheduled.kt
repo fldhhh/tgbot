@@ -3,6 +3,7 @@ package me.kuku.telegram.scheduled
 import com.pengrad.telegrambot.TelegramBot
 import com.pengrad.telegrambot.request.SendMessage
 import kotlinx.coroutines.delay
+import me.kuku.telegram.context.asyncExecute
 import me.kuku.telegram.entity.*
 import me.kuku.telegram.logic.HostLocLogic
 import me.kuku.telegram.logic.HostLocPost
@@ -47,7 +48,7 @@ class HostLocScheduled(
                     内容：${HostLocLogic.postContent(hostLocPost.url, hostLocEntity.cookie)}
                 """.trimIndent()
                 val sendMessage = SendMessage(hostLocEntity.tgId, str)
-                telegramBot.execute(sendMessage)
+                telegramBot.asyncExecute(sendMessage)
             }
         }
     }
@@ -56,7 +57,7 @@ class HostLocScheduled(
     suspend fun sign() {
         val list = hostLocService.findBySign(Status.ON)
         for (hostLocEntity in list) {
-            logService.log(hostLocEntity.tgId, LogType.HostLoc) {
+            logService.log(hostLocEntity, LogType.HostLoc) {
                 delay(3000)
                 HostLocLogic.sign(hostLocEntity.cookie)
             }

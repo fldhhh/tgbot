@@ -13,12 +13,13 @@ class GlaDosEntity: BaseEntity() {
     var sign: Status = Status.OFF
 }
 
-@Suppress("SpringDataRepositoryMethodReturnTypeInspection")
 interface GlaDosRepository: CoroutineCrudRepository<GlaDosEntity, String> {
 
     suspend fun findBySign(sign: Status): List<GlaDosEntity>
 
-    suspend fun findByTgId(tgId: Long): GlaDosEntity?
+    suspend fun findByTgIdAndTgName(tgId: Long, tgName: String?): GlaDosEntity?
+
+    suspend fun deleteByTgIdAndTgName(tgId: Long, tgName: String?)
 
 }
 
@@ -31,6 +32,8 @@ class GlaDosService(
 
     suspend fun findBySign(sign: Status) = glaDosRepository.findBySign(sign)
 
-    suspend fun findByTgId(tgId: Long) = glaDosRepository.findByTgId(tgId)
+    suspend fun findByTgId(tgId: Long) = glaDosRepository.findEnableEntityByTgId(tgId) as? GlaDosEntity
+
+    suspend fun deleteByTgId(tgId: Long) = glaDosRepository.deleteEnableEntityByTgId(tgId)
 
 }
