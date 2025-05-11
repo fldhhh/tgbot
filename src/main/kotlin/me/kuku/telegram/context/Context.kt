@@ -4,16 +4,14 @@ package me.kuku.telegram.context
 
 import com.pengrad.telegrambot.TelegramBot
 import com.pengrad.telegrambot.model.CallbackQuery
+import com.pengrad.telegrambot.model.InlineQuery
 import com.pengrad.telegrambot.model.Message
 import com.pengrad.telegrambot.model.Update
-import com.pengrad.telegrambot.model.request.InlineKeyboardMarkup
-import com.pengrad.telegrambot.model.request.InputMedia
-import com.pengrad.telegrambot.model.request.Keyboard
-import com.pengrad.telegrambot.model.request.ParseMode
+import com.pengrad.telegrambot.model.request.*
 import com.pengrad.telegrambot.request.*
 import com.pengrad.telegrambot.response.SendResponse
+import kotlinx.coroutines.runBlocking
 import me.kuku.telegram.utils.CacheManager
-import me.kuku.utils.JobManager
 import org.springframework.stereotype.Component
 import java.io.Serializable
 import java.time.Duration
@@ -22,12 +20,16 @@ import kotlin.collections.ArrayList
 
 abstract class Context {
     abstract val tgId: Long
-    abstract val chatId: Long
     abstract val bot: TelegramBot
+}
+
+abstract class MessageContext: Context() {
+    abstract val chatId: Long
     abstract val message: Message
     abstract val messageThreadId: Int?
 
-    suspend fun sendMessage(text: String, replyKeyboard: Keyboard? = null, parseMode: ParseMode? = null): SendResponse {
+    suspend fun sendMessage(text: String, replyKeyboard: Keyboard? = null, parseMode: ParseMode? = null,
+                            replyToMessageId: Int? = null): SendResponse {
         val sendMessage = SendMessage(chatId, text)
         replyKeyboard?.let {
             sendMessage.replyMarkup(replyKeyboard)
@@ -35,16 +37,24 @@ abstract class Context {
         parseMode?.let {
             sendMessage.parseMode(parseMode)
         }
-        message.messageThreadId()?.let {
-            sendMessage.messageThreadId(it)
+        if (replyToMessageId == null) {
+            message.messageThreadId()?.let {
+                sendMessage.messageThreadId(it)
+            }
+        }
+        replyToMessageId?.let {
+            sendMessage.replyToMessageId(it)
         }
         return bot.asyncExecute(sendMessage)
     }
 
     suspend fun Message.delete(timeout: Long = 0) {
         if (timeout > 0) {
-            JobManager.delay(timeout) {
-                bot.asyncExecute(DeleteMessage(chatId, this@delete.messageId()))
+            Thread.startVirtualThread {
+                runBlocking {
+                    delete(timeout)
+                    bot.asyncExecute(DeleteMessage(chatId, this@delete.messageId()))
+                }
             }
         } else {
             bot.asyncExecute(DeleteMessage(chatId, this.messageId()))
@@ -52,7 +62,7 @@ abstract class Context {
     }
 }
 
-class AbilityContext(override val bot: TelegramBot, val update: Update): Context() {
+class AbilityContext(override val bot: TelegramBot, val update: Update): MessageContext() {
 
     override val message: Message = update.message()
 
@@ -81,18 +91,24 @@ private val callbackAfter by lazy {
     CacheManager.getCache<String, Any>("callbackAfter", Duration.ofMinutes(5))
 }
 
-@Suppress("ConstPropertyName")
-private data class History(var message: Message?, var data: String): Serializable {
+private data class History(var message: Message?, var data: String, var text: String? = null): Serializable {
     companion object {
         private const val serialVersionUID = 1L
     }
 }
 
 
-class TelegramContext(override val bot: TelegramBot, val update: Update): Context() {
+class TelegramContext(override val bot: TelegramBot, val update: Update): MessageContext() {
     lateinit var query: CallbackQuery
     override val message: Message by lazy {
-        if (this::query.isInitialized) query.message() else update.message()
+        if (this::query.isInitialized) {
+            val tempMessage = query.maybeInaccessibleMessage()
+            if (tempMessage is Message) {
+                tempMessage
+            } else {
+               error("bot can't access the message")
+            }
+        } else update.message()
     }
     override val tgId: Long by lazy {
         if (this::query.isInitialized) query.from().id() else update.chatMember().from().id()
@@ -118,13 +134,13 @@ class TelegramContext(override val bot: TelegramBot, val update: Update): Contex
             arrayListOf()
         }
         val lastButton = message.replyMarkup().inlineKeyboard().last().last()
-        val lastCallbackData = lastButton.callbackData()
-        if (lastCallbackData == data && lastButton.text() == "返回" && history.find { it.data == lastCallbackData } == null) {
+        val lastCallbackData = lastButton.callbackData
+        if (lastCallbackData == data && lastButton.text == "返回" && history.find { it.data == lastCallbackData } == null) {
             errorAnswerCallbackQuery("该返回按钮不可用，缓存已过期")
         }
         if (history.isEmpty() || (history.lastOrNull() != null && history.last().data != data)) {
             if (history.lastOrNull() == null) {
-                history.addLast(History(message, "return_${UUID.randomUUID()}"))
+                history.addLast(History(message, "return_${UUID.randomUUID()}", message.text()))
             } else {
                 history.last().message = message
             }
@@ -218,7 +234,7 @@ class MonitorReturn(
             val first = list?.first()
             if (first?.data == data) {
                 val message = first.message!!
-                val editMessageText = EditMessageText(tgId, mes, message.text())
+                val editMessageText = EditMessageText(tgId, mes, first.text)
                     .replyMarkup(message.replyMarkup())
                 telegramBot.asyncExecute(editMessageText)
             } else {
@@ -232,4 +248,19 @@ class MonitorReturn(
         after?.invoke(TelegramContext(telegramBot, this@Update))
     }
 
+}
+
+class InlineQueryContext(override val bot: TelegramBot, val update: Update): Context() {
+    val inlineQuery: InlineQuery = update.inlineQuery() ?: error("inlineQuery is null")
+
+    override val tgId: Long
+        get() = inlineQuery.from().id()
+
+    suspend fun answerInlineQuery(vararg results: InlineQueryResult<*>, cacheTime: Int? = null) {
+        val answerInlineQuery = AnswerInlineQuery(inlineQuery.id(), *results)
+        cacheTime?.let {
+            answerInlineQuery.cacheTime(it)
+        }
+        bot.asyncExecute(answerInlineQuery)
+    }
 }

@@ -2,10 +2,13 @@ package me.kuku.telegram.config
 
 import com.pengrad.telegrambot.TelegramBot
 import com.pengrad.telegrambot.UpdatesListener
+import io.ktor.client.request.*
+import io.ktor.http.*
 import jakarta.annotation.PostConstruct
 import kotlinx.coroutines.runBlocking
 import me.kuku.telegram.context.*
 import me.kuku.telegram.utils.SpringUtils
+import me.kuku.telegram.utils.client
 import okhttp3.OkHttpClient
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.context.ApplicationListener
@@ -30,6 +33,7 @@ class TelegramBean(
 
     private val telegramSubscribeList = mutableListOf<TelegramSubscribe>()
     private val abilitySubscriberList = mutableListOf<AbilitySubscriber>()
+    private val inlineQuerySubscriberList = mutableListOf<InlineQuerySubscriber>()
     private val updateFunction = mutableListOf<UpdateFunction>()
     private data class UpdateFunction(val function: KFunction<*>, val any: Any)
 
@@ -43,6 +47,7 @@ class TelegramBean(
             }
         }
         val abilitySubscriber = AbilitySubscriber()
+        val inlineQuerySubscriber = InlineQuerySubscriber()
         for (clazz in clazzList) {
             val functions = kotlin.runCatching {
                 clazz.kotlin.declaredMemberExtensionFunctions
@@ -80,10 +85,15 @@ class TelegramBean(
                         abilitySubscriberList.addAll(abilities)
                         telegramSubscribeList.addAll(telegrams)
                     }
+                    "me.kuku.telegram.context.InlineQuerySubscriber" -> {
+                        val obj = applicationContext.getBean(clazz)
+                        function.call(obj, inlineQuerySubscriber)
+                    }
                 }
             }
         }
         abilitySubscriberList.add(abilitySubscriber)
+        inlineQuerySubscriberList.add(inlineQuerySubscriber)
         val telegramBot = applicationContext.getBean(TelegramBot::class.java)
         telegramBot.setUpdatesListener {
             for (update in it) {
@@ -103,6 +113,9 @@ class TelegramBean(
                             telegramExceptionHandler.invokeHandler(TelegramContext(telegramBot, update)) {
                                 telegramSubscribe.invoke(telegramBot, update)
                             }
+                        }
+                        for (single in inlineQuerySubscriberList) {
+                            single.invoke(telegramBot, update)
                         }
                         abilitySubscriberList.repeatCheck(telegramBot, update)
                     }
@@ -177,7 +190,22 @@ class TelegramConfig {
     }
 }
 
-val api: String by lazy {
-    val api = SpringUtils.getBean<TelegramConfig>().api
-    api.ifEmpty { "https://api.jpa.cc" }
-}
+private var tempApi: String? = null
+private const val apiErrorMsg: String = "访问api受限，请联系bot拥有者检查api服务器"
+
+val api: String
+    get() {
+        if (tempApi == null) {
+            val configApi = SpringUtils.getBean<TelegramConfig>().api
+            tempApi = configApi.ifEmpty { "https://api.jpa.cc" }
+        }
+        try {
+            val response = runBlocking {
+                client.get(tempApi!!)
+            }
+            if (response.status == HttpStatusCode.OK) return tempApi!!
+            else error(apiErrorMsg)
+        } catch (e: Exception) {
+            error(apiErrorMsg)
+        }
+    }

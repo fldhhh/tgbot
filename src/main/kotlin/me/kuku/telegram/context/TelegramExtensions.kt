@@ -12,7 +12,7 @@ import io.ktor.client.call.*
 import io.ktor.client.request.*
 import me.kuku.telegram.config.TelegramConfig
 import me.kuku.telegram.utils.SpringUtils
-import me.kuku.utils.client
+import me.kuku.telegram.utils.client
 
 fun inlineKeyboardButton(text: String, callbackData: String): InlineKeyboardButton = InlineKeyboardButton(text).callbackData(callbackData)
 
@@ -24,7 +24,13 @@ suspend fun TelegramBot.sendPic(tgId: Long, text: String, picUrl: List<String>, 
         messageThreadId?.let {
             sendPhoto.messageThreadId(it)
         }
-        asyncExecute(sendPhoto)
+        try {
+            asyncExecute(sendPhoto)
+        } catch (e: Exception) {
+            sendPhoto.caption("")
+            asyncExecute(sendPhoto)
+            sendTextMessage(tgId, text, messageThreadId)
+        }
     } else if (picUrl.isEmpty()) {
         sendTextMessage(tgId, text, messageThreadId)
     } else {
