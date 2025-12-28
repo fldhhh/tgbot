@@ -1,6 +1,6 @@
 pluginManagement {
     repositories {
-        maven { url = uri("https://nexus.kuku.me/repository/maven-public/") }
+        maven { url = uri("https://maven.aliyun.com/repository/public") }
         gradlePluginPortal()
     }
 }

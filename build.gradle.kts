@@ -15,7 +15,7 @@ version = "1.0-SNAPSHOT"
 
 repositories {
 //    mavenLocal()
-    maven("https://nexus.kuku.me/repository/maven-public/")
+    maven("https://maven.aliyun.com/repository/public")
     mavenCentral()
 }
 
