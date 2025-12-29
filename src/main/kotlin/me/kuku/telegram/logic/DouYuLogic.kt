@@ -5,15 +5,16 @@ import com.fasterxml.jackson.databind.node.NullNode
 import com.fasterxml.jackson.module.kotlin.contains
 import io.ktor.client.call.*
 import io.ktor.client.request.*
-import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.coroutines.delay
+import me.kuku.pojo.CommonResult
+import me.kuku.pojo.UA
 import me.kuku.telegram.entity.DouYuEntity
 import me.kuku.telegram.entity.DouYuService
-import me.kuku.telegram.exception.qrcodeNotScanned
-import me.kuku.telegram.utils.*
+import me.kuku.utils.*
 import org.springframework.stereotype.Service
+import java.nio.charset.Charset
 
 @Service
 class DouYuLogic(
@@ -23,12 +24,14 @@ class DouYuLogic(
     private val referer = "https://passport.douyu.com/index/login?passport_reg_callback=PASSPORT_REG_SUCCESS_CALLBACK&passport_login_callback=PASSPORT_LOGIN_SUCCESS_CALLBACK&passport_close_callback=PASSPORT_CLOSE_CALLBACK&passport_dp_callback=PASSPORT_DP_CALLBACK&type=login&client_id=1&state=https%3A%2F%2Fwww.douyu.com%2F"
 
     suspend fun getQrcode(): DouYuQrcode {
-        val jsonNode = client.submitForm("https://passport.douyu.com/scan/generateCode",
-            parameters {
+        val jsonNode = client.post("https://passport.douyu.com/scan/generateCode") {
+            setFormDataContent {
                 append("client_id", "1")
                 append("isMultiAccount", "0")
-            }) {
-            referer(referer)
+            }
+            headers {
+                referer(referer)
+            }
         }.body<JsonNode>()
         if (jsonNode["error"].asInt() != 0) error(jsonNode["data"].asText())
         val data = jsonNode["data"]
@@ -38,7 +41,7 @@ class DouYuLogic(
     }
 
 
-    suspend fun checkQrcode(douYuQrcode: DouYuQrcode): DouYuEntity {
+    suspend fun checkQrcode(douYuQrcode: DouYuQrcode): CommonResult<DouYuEntity> {
         val checkResponse =
             client.get("https://passport.douyu.com/japi/scan/auth?time=${System.currentTimeMillis()}&code=${douYuQrcode.code}") {
                 headers {
@@ -47,16 +50,16 @@ class DouYuLogic(
             }
         val jsonNode = checkResponse.body<JsonNode>()
         return when (jsonNode["error"].asInt()) {
-            -2,1 -> qrcodeNotScanned()
+            -2,1 -> CommonResult.failure("客户端已扫码或未扫码", code  = 0)
             0 -> {
                 val url = jsonNode["data"]["url"].asText()
                 val response = client.get("${url}&callback=appClient_json_callback&_=${System.currentTimeMillis()}") {
                     referer("https://passport.douyu.com/")
                 }
-                val cookie = response.setCookie().renderCookieHeader() + checkResponse.setCookie().renderCookieHeader()
-                DouYuEntity().also { it.cookie = cookie }
+                val cookie = response.cookie() + checkResponse.cookie()
+                CommonResult.success(DouYuEntity().also { it.cookie = cookie })
             }
-            else -> error(jsonNode["data"].asText())
+            else -> CommonResult.failure(jsonNode["data"].asText())
         }
     }
 
@@ -84,7 +87,7 @@ class DouYuLogic(
         val cookies = authResponse.setCookie()
         for (obj in cookies) {
             val name = obj.name
-            val queryValue = cookies.find { it.name == name }?.value
+            val queryValue = OkUtils.cookie(cookie, name)
             if (queryValue == null) cookie += "$name=${obj.value}; "
             else {
                 cookie = cookie.replace(queryValue, obj.value)
@@ -94,27 +97,26 @@ class DouYuLogic(
         douYuService.save(douYuEntity)
     }
 
-    suspend fun room(douYuEntity: DouYuEntity): List<DouYuRoom> {
+    suspend fun room(douYuEntity: DouYuEntity): CommonResult<List<DouYuRoom>> {
         renewCookie(douYuEntity)
         var i = 1
         val resultList = mutableListOf<DouYuRoom>()
         while (true) {
-            val jsonNode = client.get("https://www.douyu.com/wgapi/livenc/liveweb/follow/list?sort=0&cid1=0&page=${i++}") {
-                cookieString(douYuEntity.cookie)
-            }.body<JsonNode>()
-            if (jsonNode["error"].asInt() == 0) {
+            val jsonNode = OkHttpKtUtils.getJson("https://www.douyu.com/wgapi/livenc/liveweb/follow/list?sort=0&cid1=0&page=${i++}",
+                OkUtils.headers(douYuEntity.cookie, "", UA.PC))
+            if (jsonNode.getInteger("error") == 0) {
                 val list = jsonNode["data"]["list"] ?: break
                 if (list is NullNode) break
                 if (list.isEmpty) break
                 for (singleJsonNode in list) {
-                    val douYuRoom = DouYuRoom(singleJsonNode["room_name"].asText(), singleJsonNode["nickname"].asText(),
-                        "https://www.douyu.com${singleJsonNode["url"].asText()}", singleJsonNode["game_name"].asText(), singleJsonNode["show_status"].asInt() == 1 && singleJsonNode["videoLoop"].asInt() == 0 ,
-                        singleJsonNode["online"].asText(), singleJsonNode["room_id"].asLong(), singleJsonNode["room_src"].asText().replace("/dy1", ""))
+                    val douYuRoom = DouYuRoom(singleJsonNode.getString("room_name"), singleJsonNode.getString("nickname"),
+                        "https://www.douyu.com${singleJsonNode.getString("url")}", singleJsonNode.getString("game_name"), singleJsonNode.getInteger("show_status") == 1 && singleJsonNode.getInteger("videoLoop") == 0 ,
+                        singleJsonNode.getString("online"), singleJsonNode.getLong("room_id"), singleJsonNode["room_src"].asText().replace("/dy1", ""))
                     resultList.add(douYuRoom)
                 }
-            } else error(jsonNode["msg"].asText())
+            } else return CommonResult.failure(jsonNode.getString("msg"))
         }
-        return resultList
+        return CommonResult.success(resultList)
     }
 
     private suspend fun yuBaCookie(douYuEntity: DouYuEntity): String {
@@ -132,7 +134,7 @@ class DouYuLogic(
                 referer("https://yuba.douyu.com/")
             }
         }
-        return authResponse.setCookie().renderCookieHeader()
+        return authResponse.cookie()
     }
 
     suspend fun fishGroup(douYuEntity: DouYuEntity) {
@@ -153,18 +155,17 @@ class DouYuLogic(
             val infoNode = infoResponse.body<JsonNode>()
             val exp = infoNode["data"]["group_exp"].asInt()
             val isSign = infoNode["data"]["is_signed"].asInt()
-            val setCookie = infoResponse.setCookie()
-            val infoCookie = setCookie.renderCookieHeader()
+            val infoCookie = infoResponse.cookie()
             if (isSign == 0) {
-                val signNode = client.submitForm("https://yuba.douyu.com/ybapi/topic/sign?timestamp=${timestamp()}",
-                    parameters {
+                val signNode = client.post("https://yuba.douyu.com/ybapi/topic/sign?timestamp=${timestamp()}") {
+                    setFormDataContent {
                         append("group_id", id.toString())
                         append("cur_exp", exp.toString())
-                    }) {
+                    }
                     headers {
                         cookieString(cookie + infoCookie)
                         referer("https://yuba.douyu.com/group/$id")
-                        append("x-csrf-token", setCookie.find { it.name == "acf_yb_t" }?.value ?: "")
+                        append("x-csrf-token", OkUtils.cookie(infoCookie, "acf_yb_t")!!)
                     }
                 }.bodyAsText().toJsonNode()
                 if (signNode["status_code"].asInt() != 200) error(signNode["data"].asText())
@@ -219,6 +220,54 @@ class DouYuLogic(
             list.add(douYuFish)
         }
         return list
+    }
+
+    private fun String.token(): String {
+        return this.substring(this.indexOf('.') + 1, this.lastIndexOf('.')).base64Decode()
+            .toString(Charset.defaultCharset()).toJsonNode()["token"].asText()
+    }
+
+    suspend fun appSign(douYuEntity: DouYuEntity) {
+        val appCookie = douYuEntity.appCookie
+        val did = OkUtils.cookie(appCookie, "acf_did") ?: error("cookie格式不正确")
+        val auth = OkUtils.cookie(appCookie, "acf_auth") ?: error("cookie格式不正确")
+        val token = auth.token()
+        val response = client.post("https://apiv2.douyucdn.cn/h5nc/sign/sendSign") {
+            setFormDataContent {
+                append("client_sys", "android1")
+                append("did", did)
+                append("token", token)
+            }
+            headers {
+                append("cookie", appCookie)
+            }
+        }
+        if (response.contentType() == ContentType.Text.Html) error("cookie已失效")
+    }
+
+    private suspend fun joinOrClock(douYuEntity: DouYuEntity, url: String) {
+        val appCookie = douYuEntity.appCookie
+        val dyToken = OkUtils.cookie(appCookie, "dy_token") ?: error("cookie格式不正确")
+        val auth = OkUtils.cookie(appCookie, "acf_auth") ?: error("cookie格式不正确")
+        val token = auth.token()
+        val response = client.post(url) {
+            setFormDataContent {
+                append("token", token)
+                append("dy_token", dyToken)
+            }
+            headers {
+                append("cookie", appCookie)
+            }
+        }
+        if (response.contentType() == ContentType.Text.Html) error("cookie已失效")
+    }
+
+    suspend fun joinSign(douYuEntity: DouYuEntity) {
+        joinOrClock(douYuEntity, "https://apiv2.douyucdn.cn/h5nc/userSignActivity/joinSignActivity")
+    }
+
+    suspend fun clockSign(douYuEntity: DouYuEntity) {
+        joinOrClock(douYuEntity, "https://apiv2.douyucdn.cn/h5nc/userSignActivity/clockSignActivity")
     }
 
 }

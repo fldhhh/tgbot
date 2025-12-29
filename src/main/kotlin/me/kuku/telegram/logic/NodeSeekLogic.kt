@@ -3,14 +3,10 @@ package me.kuku.telegram.logic
 import com.fasterxml.jackson.databind.JsonNode
 import io.ktor.client.call.*
 import io.ktor.client.request.*
-import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
-import io.ktor.http.*
 import me.kuku.telegram.config.api
 import me.kuku.telegram.entity.NodeSeekEntity
-import me.kuku.telegram.utils.client
-import me.kuku.telegram.utils.toJsonNode
-import me.kuku.telegram.utils.toUrlEncode
+import me.kuku.utils.*
 
 object NodeSeekLogic {
 
@@ -29,14 +25,14 @@ object NodeSeekLogic {
     }
 
     suspend fun login(username: String, password: String, token: String? = null): String {
-        val jsonNode = client.submitForm("$api/nodeseek/login",
-            parameters {
+        val jsonNode = client.post("$api/nodeseek/login") {
+            setFormDataContent {
                 append("username", username)
                 append("password", password)
                 token?.let {
                     append("token", token)
                 }
-            }) {
+            }
         }.bodyAsText().toJsonNode()
         if (jsonNode.has("cookie")) return jsonNode["cookie"].asText()
         else error(jsonNode["message"].asText())

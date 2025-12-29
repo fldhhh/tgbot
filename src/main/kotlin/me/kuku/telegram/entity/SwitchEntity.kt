@@ -81,10 +81,10 @@ class SwitchService(
 }
 
 private val clazzList = mutableListOf(
-    BaiduRepository::class, BiliBiliRepository::class,
+    AliDriveRepository::class, BaiduRepository::class, BiliBiliRepository::class,
     DouYuRepository::class, ECloudRepository::class,
-    HostLocRepository::class, HuYaRepository::class,
-    KuGouRepository::class, LeiShenRepository::class,
-    LogRepository::class, MiHoYoRepository::class,
-    NodeSeekRepository::class, SmZdmRepository::class, StepRepository::class,
-    WeiboRepository::class)
+    GlaDosRepository::class, HostLocRepository::class, HuYaRepository::class,
+    IqyRepository::class, KuGouRepository::class, LeiShenRepository::class,
+    LogRepository::class, MiHoYoRepository::class, NetEaseRepository::class,
+    NodeSeekRepository::class, PixivRepository::class, SmZdmRepository::class, StepRepository::class,
+    TwitterRepository::class, WeiboRepository::class)

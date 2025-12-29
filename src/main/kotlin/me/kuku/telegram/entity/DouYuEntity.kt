@@ -12,6 +12,7 @@ class DouYuEntity: BaseEntity() {
     @Id
     var id: String? = null
     var cookie: String = ""
+    var appCookie: String = ""
     var live: Status = Status.OFF
     var fishGroup: Status = Status.OFF
     var push: Status = Status.OFF

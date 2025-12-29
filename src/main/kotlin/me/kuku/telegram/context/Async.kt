@@ -11,11 +11,7 @@ suspend fun <T : BaseRequest<T, R>, R : BaseResponse> TelegramBot.asyncExecute(r
     val completableDeferred = CompletableDeferred<R>()
     this.execute(request, object: Callback<T, R> {
         override fun onResponse(request: T, response: R) {
-            if (response.isOk) {
-                completableDeferred.complete(response)
-            } else {
-                completableDeferred.completeExceptionally(IllegalStateException(response.description()))
-            }
+            completableDeferred.complete(response)
         }
 
         override fun onFailure(request: T, e: IOException) {

@@ -1,6 +1,5 @@
 package me.kuku.telegram.extension
 
-import com.fasterxml.jackson.databind.JsonNode
 import com.pengrad.telegrambot.model.request.InlineKeyboardButton
 import com.pengrad.telegrambot.model.request.InlineKeyboardMarkup
 import com.pengrad.telegrambot.model.request.InputMediaPhoto
@@ -8,22 +7,22 @@ import com.pengrad.telegrambot.model.request.ParseMode
 import com.pengrad.telegrambot.request.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import me.kuku.telegram.context.*
 import me.kuku.telegram.entity.BiliBiliService
 import me.kuku.telegram.logic.BiliBiliLogic
+import me.kuku.telegram.logic.ToolLogic
+import me.kuku.telegram.logic.TwitterLogic
 import me.kuku.telegram.logic.YgoLogic
-import me.kuku.telegram.utils.RegexUtils
-import me.kuku.telegram.utils.client
 import me.kuku.telegram.utils.githubCommit
+import me.kuku.utils.*
 import org.springframework.stereotype.Service
 
 @Service
 class ToolExtension(
     private val ygoLogic: YgoLogic,
+    private val toolLogic: ToolLogic,
     private val biliBiliService: BiliBiliService
 ) {
 
@@ -46,7 +45,7 @@ class ToolExtension(
                 answerCallbackQuery("获取成功")
                 val id = query.data().split("-")[1]
                 val card = ygoLogic.searchDetail(id.toLong())
-                val sendPhoto = SendPhoto(chatId, client.get(card.imageUrl).bodyAsBytes())
+                val sendPhoto = SendPhoto(chatId, OkHttpKtUtils.getBytes(card.imageUrl))
                 sendPhoto.caption("中文名：${card.chineseName}\n日文名：${card.japaneseName}\n英文名：${card.englishName}\n效果：\n${card.effect}\n链接：${card.url}")
                 bot.asyncExecute(sendPhoto)
             }
@@ -77,9 +76,9 @@ class ToolExtension(
             val r18 = kotlin.runCatching {
                 if (firstArg().lowercase() == "r18") 1 else 0
             }.getOrDefault(0)
-            val jsonNode = client.get("https://api.lolicon.app/setu/v2?r18=$r18").body<JsonNode>()
+            val jsonNode = OkHttpKtUtils.getJson("https://api.lolicon.app/setu/v2?r18=$r18")
             val url = jsonNode["data"][0]["urls"]["original"].asText()
-            val bytes = client.get(url).bodyAsBytes()
+            val bytes = OkHttpKtUtils.getBytes(url)
             if (bytes.size > 1024 * 10 * 1024) {
                 val sendDocument = SendDocument(chatId, bytes).fileName("lolicon.jpg")
                 message.messageThreadId()?.let {
@@ -98,12 +97,12 @@ class ToolExtension(
             val r18 = kotlin.runCatching {
                 if (firstArg().lowercase() == "r18") 1 else 0
             }.getOrDefault(0)
-            val jsonNode = client.get("https://api.lolicon.app/setu/v2?num=5&r18=$r18").body<JsonNode>()
+            val jsonNode = OkHttpKtUtils.getJson("https://api.lolicon.app/setu/v2?num=5&r18=$r18")
             val list = jsonNode["data"].map { node -> node["urls"]["original"].asText() }
             val inputMediaList = mutableListOf<InputMediaPhoto>()
             for (i in list.indices) {
                 val s = list[i]
-                val bytes = client.get(s).bodyAsBytes()
+                val bytes = OkHttpKtUtils.getBytes(s)
                 if (bytes.size > 1024 * 10 * 1024) continue
                 val mediaPhoto = InputMediaPhoto(bytes)
                 inputMediaList.add(mediaPhoto)
@@ -113,6 +112,25 @@ class ToolExtension(
                 sendMediaGroup.messageThreadId(it)
             }
             bot.asyncExecute(sendMediaGroup)
+        }
+        sub("saucenao") {
+            val photos = update.message().photo()
+            val photoSize = photos.max() ?: error("未发现图片")
+            val getFile = GetFile(photoSize.fileId())
+            val fileResponse = bot.asyncExecute(getFile)
+            val byteArray = fileResponse.file().byteArray()
+            val list = toolLogic.saucenao(byteArray)
+            if (list.isEmpty()) error("未找到结果")
+            val result = list[0]
+            sendMessage("""
+                相似度：${result.similarity}
+                名字：${result.indexName}
+                标题：${result.title}
+                预览链接：${result.thumbnail}
+                源链接：${result.extUrls}
+                作者：${result.author}
+                作者主页：${result.authUrl}
+            """.trimIndent())
         }
     }
 
@@ -134,24 +152,33 @@ class ToolExtension(
                 file.delete()
             }
         }
-
-        sub("dy", 1, locality = Locality.ALL) {
+        sub("x", 1, locality = Locality.ALL) {
             mutex.withLock {
-                val urlArg = firstArg()
-                val locationResponse = client.get(urlArg) {
-                    userAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1")
+                val id = try {
+                    firstArg().toLong()
+                } catch (e: NumberFormatException) {
+                    MyUtils.regex("(?<=/status/)[0-9]*", firstArg())?.toLong() ?: error("错误的x链接")
                 }
-                val htmlUrl = locationResponse.headers["Location"] ?: error("获取抖音视频失败")
-                val html = client.get(htmlUrl) {
-                    userAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1")
-                }.bodyAsText()
-                val id = RegexUtils.extract(html, "(?<=video_id=)", "&") ?: error("获取抖音视频失败")
-                val response = client.get("https://m.douyin.com/aweme/v1/playwm/?video_id=$id&ratio=720p&line=0")
-                val url = response.headers["Location"] ?: error("获取抖音视频失败")
-                val bytes = client.get(url).body<ByteArray>()
-                val sendVideo = SendVideo(chatId, bytes).fileName("$id.mp4")
-                messageThreadId?.let { sendVideo.messageThreadId(it) }
-                bot.asyncExecute(sendVideo)
+                val twitterPojo = TwitterLogic.tweet(id)
+                val text = TwitterLogic.convertStr(twitterPojo)
+                val videoUrl = if (twitterPojo.videoList.isNotEmpty()) twitterPojo.videoList[0]
+                else ""
+                try {
+                    if (videoUrl.isNotEmpty()) {
+                        client.get(videoUrl).body<ByteArray>().let {
+                            val sendVideo = SendVideo(chatId, it).fileName("${twitterPojo.id}.mp4")
+                                .caption(text)
+                            messageThreadId?.let { id -> sendVideo.messageThreadId(id) }
+                            bot.asyncExecute(sendVideo)
+                        }
+                    } else if (twitterPojo.photoList.isNotEmpty() || twitterPojo.forwardPhotoList.isNotEmpty()) {
+                        val imageList = twitterPojo.photoList
+                        imageList.addAll(twitterPojo.forwardPhotoList)
+                        bot.sendPic(chatId, text, imageList, messageThreadId)
+                    } else bot.sendTextMessage(chatId, text, messageThreadId)
+                } catch (e: Exception) {
+                    bot.sendTextMessage(chatId, text, messageThreadId)
+                }
             }
         }
     }

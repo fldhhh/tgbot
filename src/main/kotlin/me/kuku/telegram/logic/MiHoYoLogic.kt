@@ -4,23 +4,22 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.databind.JsonNode
 import io.ktor.client.call.*
 import io.ktor.client.request.*
-import io.ktor.http.*
-import io.ktor.util.*
 import kotlinx.coroutines.delay
+import me.kuku.pojo.CommonResult
+import me.kuku.pojo.UA
 import me.kuku.telegram.entity.MiHoYoEntity
-import me.kuku.telegram.exception.qrcodeNotScanned
-import me.kuku.telegram.utils.*
+import me.kuku.utils.*
 import org.springframework.stereotype.Service
 import java.util.*
 
 @Service
 class MiHoYoLogic(
-    private val twoCaptchaLogic: TwoCaptchaLogic
+    private val geeTestLogic: GeeTestLogic
 ) {
 
     context(HttpRequestBuilder)
     private fun MiHoYoFix.append() {
-        val jsonNode = Jackson.readTree(Jackson.writeValueAsString(this@MiHoYoFix))
+        val jsonNode = Jackson.parse(Jackson.toJsonString(this@MiHoYoFix))
         headers {
             for (entry in jsonNode.fields()) {
                 val key = entry.key
@@ -109,7 +108,7 @@ class MiHoYoLogic(
         return MiHoYoQrcode(fix, data["url"].asText(), data["ticket"].asText())
     }
 
-    suspend fun qrcodeLogin2(qrcode: MiHoYoQrcode): MiHoYoEntity {
+    suspend fun qrcodeLogin2(qrcode: MiHoYoQrcode): CommonResult<MiHoYoEntity> {
         val response = client.post("https://passport-api.miyoushe.com/account/ma-cn-passport/web/queryQRLoginStatus") {
             setJsonBody("""{"ticket":"${qrcode.ticket}"}""")
             qrcode.fix.append()
@@ -118,9 +117,9 @@ class MiHoYoLogic(
         jsonNode.check()
         val data = jsonNode["data"]
         return when (val status = data["status"].asText()) {
-            "Created", "Scanned" -> qrcodeNotScanned()
+            "Created", "Scanned" -> CommonResult.fail("未扫码", null, 0)
             "Confirmed" -> {
-                var cookie = response.setCookie().renderCookieHeader()
+                var cookie = response.cookie()
                 val loginResponse = client.post("https://bbs-api.miyoushe.com/user/wapi/login") {
                     setJsonBody("""{"gids":"2"}""")
                     qrcode.fix.append()
@@ -130,17 +129,14 @@ class MiHoYoLogic(
                 }
                 val loginJsonNode = loginResponse.body<JsonNode>()
                 loginJsonNode.check()
-                val setCookie = loginResponse.setCookie()
-                cookie += setCookie.renderCookieHeader()
+                cookie += loginResponse.cookie()
                 val entity = MiHoYoEntity()
                 entity.fix = qrcode.fix
                 entity.cookie = cookie
                 val userInfo = data["user_info"]
                 entity.aid = userInfo["aid"].asText()
                 entity.mid = userInfo["mid"].asText()
-                val token = setCookie.find { it.name == "cookie_token_v2" }?.value ?: ""
-                entity.token = token
-                entity
+                CommonResult.success(entity)
             }
             else -> error("米游社登陆失败，未知的状态：$status")
         }
@@ -182,10 +178,10 @@ class MiHoYoLogic(
             val data = gisJsonNode["data"].asText().toJsonNode()
             val gt = data["gt"].asText()
             val challenge = data["challenge"].asText()
-            val rr = twoCaptchaLogic.geeTest(gt, challenge,"https://static.mohoyo.com", tgId = tgId)
+            val rr = geeTestLogic.rr(gt, "https://static.mohoyo.com", challenge, tgId = tgId)
             val aiGis = "$sessionId;" + """
                 {"geetest_challenge":"${rr.challenge}","geetest_seccode":"${rr.validate}|jordan","geetest_validate":"${rr.validate}"}
-            """.trimIndent().encodeBase64()
+            """.trimIndent().base64Encode()
             headerMap["x-rpc-aigis"] = aiGis
             headerMap["DS"] = ds().ds
             jsonNode = client.post("https://passport-api.mihoyo.com/account/ma-cn-passport/app/loginByPassword") {
@@ -215,46 +211,43 @@ class MiHoYoLogic(
     }
 
     suspend fun webLogin(account: String, password: String, tgId: Long? = null): MiHoYoEntity {
-        val fix = MiHoYoFix()
+        val beforeJsonNode = OkHttpKtUtils.getJson("https://webapi.account.mihoyo.com/Api/create_mmt?scene_type=1&now=${System.currentTimeMillis()}&reason=bbs.mihoyo.com")
+        val dataJsonNode = beforeJsonNode["data"]["mmt_data"]
+        val challenge = dataJsonNode.getString("challenge")
+        val gt = dataJsonNode.getString("gt")
+        val mmtKey = dataJsonNode.getString("mmt_key")
+        val rr = geeTestLogic.rr(gt, "https://bbs.mihoyo.com/ys/", challenge, tgId = tgId)
+        val cha = rr.challenge
+        val validate = rr.validate
         val rsaKey = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDDvekdPMHN3AYhm/vktJT+YJr7cI5DcsNKqdsx5DZX0gDuWFuIjzdwButrIYPNmRJ1G8ybDIF7oDW2eEpm5sMbL9zs9ExXCdvqrn51qELbqj0XxtMTIpaCHFSI50PfPpTFV9Xt/hmyVwokoOXFlAEgCn+QCgGs52bFoYMtyi+xEQIDAQAB"
-        var response = client.post("https://passport-api.miyoushe.com/account/ma-cn-passport/web/loginByPassword") {
-            setJsonBody("""{"account":"${account.rsaEncrypt(rsaKey)}","password":"${password.rsaEncrypt(rsaKey)}"}""")
-            fix.loginHeader()
-        }
-        var cookie = response.setCookie().renderCookieHeader()
-        var loginJsonNode = response.body<JsonNode>()
-        val code = loginJsonNode["retcode"].asInt()
-        if (code == -3101) {
-            val captchaJsonNode = response.headers["X-Rpc-Aigis"]!!.toJsonNode()
-            val sessionId = captchaJsonNode["session_id"].asText()
-            val captchaDataJsonNode = captchaJsonNode["data"].asText().toJsonNode()
-            val captchaId = captchaDataJsonNode["gt"].asText()
-            val riskType = captchaDataJsonNode["risk_type"].asText()
-            twoCaptchaLogic.geeTestV4(captchaId, "https://user.mihoyo.com/",
-                mapOf("captcha_id" to captchaId, "session_id" to sessionId, "risk_type" to riskType), tgId)
-            response = client.post("https://passport-api.miyoushe.com/account/ma-cn-passport/web/loginByPassword") {
-                setJsonBody("""{"account":"${account.rsaEncrypt(rsaKey)}","password":"${password.rsaEncrypt(rsaKey)}"}""")
-                fix.loginHeader()
-            }
-            cookie = response.setCookie().renderCookieHeader()
-            loginJsonNode = response.body<JsonNode>()
-        }
-        if (loginJsonNode["retcode"].asInt() != 0) error(loginJsonNode["message"].asText())
-        val infoDataJsonNode = loginJsonNode["data"]["user_info"]
-        val aid = infoDataJsonNode["aid"].asText()
-        val mid = infoDataJsonNode["mid"].asText()
-        val loginResponse = client.post("https://bbs-api.mihoyo.com/user/wapi/login") {
-            setJsonBody("{\"gids\":\"2\"}")
-            cookieString(cookie)
-        }
-        val finaCookie = loginResponse.body<JsonNode>()
+        val enPassword = password.rsaEncrypt(rsaKey)
+        val map = mapOf("is_bh2" to "false", "account" to account, "password" to enPassword,
+            "mmt_key" to mmtKey, "is_crypto" to "true", "geetest_challenge" to cha, "geetest_validate" to validate,
+            "geetest_seccode" to "${validate}|jordan")
+        val response = OkHttpKtUtils.post("https://webapi.account.mihoyo.com/Api/login_by_password", map, OkUtils.ua(UA.PC))
+        val loginJsonNode = OkUtils.json(response)
+        val infoDataJsonNode = loginJsonNode["data"]
+        if (infoDataJsonNode.getInteger("status") != 1) error(infoDataJsonNode.getString("msg"))
+        var cookie = OkUtils.cookie(response)
+        val infoJsonNode = infoDataJsonNode["account_info"]
+        val accountId = infoJsonNode.getString("account_id")
+        val ticket = infoJsonNode.getString("weblogin_token")
+        val cookieJsonNode = OkHttpKtUtils.getJson("https://webapi.account.mihoyo.com/Api/cookie_accountinfo_by_loginticket?login_ticket=$ticket&t=${System.currentTimeMillis()}",
+            OkUtils.headers(cookie, "", UA.PC))
+        val cookieToken = cookieJsonNode["data"]["cookie_info"]["cookie_token"].asText()
+        cookie += "cookie_token=$cookieToken; account_id=$accountId; "
+        val loginResponse = OkHttpKtUtils.post("https://bbs-api.mihoyo.com/user/wapi/login",
+            OkUtils.json("{\"gids\":\"2\"}"), OkUtils.cookie(cookie)).also { it.close() }
+        val finaCookie = OkUtils.cookie(loginResponse)
         cookie += finaCookie
+        cookie += "login_ticket=$ticket; "
         val entity = MiHoYoEntity().also {
             it.cookie = cookie
-            it.aid = aid
-            it.mid = mid
-            it.token = ""
+            it.aid = accountId
+            it.ticket = ticket
         }
+        val sToken = sToken(entity)
+        entity.sToken = sToken
         return entity
     }
 
@@ -263,8 +256,6 @@ class MiHoYoLogic(
         val fix = this@MiHoYoFix
         headers {
             referer("https://user.mihoyo.com/")
-            origin("https://user.mihoyo.com")
-            append("x-rpc-app_id", fix.app)
             append("X-Rpc-Client_type", "4")
             append("X-Rpc-Device_fp", fix.fp)
             append("X-Rpc-Device_id", fix.device)
@@ -274,14 +265,57 @@ class MiHoYoLogic(
             append("X-Rpc-Mi_referrer", "https://user.mihoyo.com/")
             append("X-Rpc-Source", "accountWebsite")
             append("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36")
-            append("cookie", "_MHYUUID=${fix.device}; DEVICEFP_SEED_ID=${RandomUtils.num(16)}; DEVICEFP_SEED_TIME=${System.currentTimeMillis()}; DEVICEFP=${fix.fp};")
+            append("cookie", "_MHYUUID=${fix.device}; DEVICEFP_SEED_ID=${MyUtils.randomNum(16)}; DEVICEFP_SEED_TIME=${System.currentTimeMillis()}; DEVICEFP=${fix.fp};")
+        }
+    }
+
+    suspend fun webNewLogin(account: String, password: String, tgId: Long? = null): MiHoYoEntity {
+        val fix = MiHoYoFix()
+        val beforeJsonNode = client.get("https://webapi.account.mihoyo.com/Api/create_mmt?scene_type=1&now=${System.currentTimeMillis()}&reason=user.mihoyo.com%23%2Flogin%2Fpassword&action_type=login_by_password&account=$account&t=${System.currentTimeMillis()}") {
+            fix.loginHeader()
+        }.body<JsonNode>()
+        val dataJsonNode = beforeJsonNode["data"]["mmt_data"]
+        val gt = dataJsonNode.getString("gt")
+        val mmtKey = dataJsonNode.getString("mmt_key")
+        val rr = geeTestLogic.rr(gt, "https://user.mihoyo.com/", mmtKey = mmtKey, tgId = tgId,
+            riskType = "icon")
+        val rsaKey = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDDvekdPMHN3AYhm/vktJT+YJr7cI5DcsNKqdsx5DZX0gDuWFuIjzdwButrIYPNmRJ1G8ybDIF7oDW2eEpm5sMbL9zs9ExXCdvqrn51qELbqj0XxtMTIpaCHFSI50PfPpTFV9Xt/hmyVwokoOXFlAEgCn+QCgGs52bFoYMtyi+xEQIDAQAB"
+        val enPassword = password.rsaEncrypt(rsaKey)
+        val data = Jackson.toJsonString(rr.secCode)
+        val response = client.post("https://webapi.account.mihoyo.com/Api/login_by_password") {
+            setFormDataContent {
+                append("account", account)
+                append("password", enPassword)
+                append("is_crypto", "true")
+                append("mmt_key", mmtKey)
+                append("geetest_v4_data", data)
+                append("source", "user.mihoyo.com")
+                append("t", System.currentTimeMillis().toString())
+            }
+            fix.loginHeader()
+        }
+        val loginJsonNode = response.body<JsonNode>()
+        if (loginJsonNode["data"]["status"].asInt() != 1) error(loginJsonNode["data"]["msg"].asText())
+        val infoDataJsonNode = loginJsonNode["data"]
+        val cookie = response.cookie()
+        val infoJsonNode = infoDataJsonNode["account_info"]
+        val accountId = infoJsonNode.getString("account_id")
+        val ticket = infoJsonNode.getString("weblogin_token")
+        val cookieResponse = client.get("https://api-takumi.mihoyo.com/account/auth/api/getAccountInfoByLoginTicket") {
+            cookieString(cookie)
+        }
+        val accountCookie = cookieResponse.cookie()
+        return MiHoYoEntity().also {
+            it.ticket = ticket
+            it.aid = accountId
+            it.cookie = cookie + accountCookie
         }
     }
 
     private fun webDs(): MiHoYoDs {
         val salt = "mx1x4xCahVMVUDJIkJ9H3jsHcUsiASGZ"
         val time = System.currentTimeMillis() / 1000
-        val randomLetter = RandomUtils.letter(6)
+        val randomLetter = MyUtils.randomLetter(6)
         val md5 = "salt=$salt&t=$time&r=$randomLetter".md5()
         val ds = "$time,$randomLetter,$md5"
         return MiHoYoDs("2.64.0", "4", ds)
@@ -290,7 +324,7 @@ class MiHoYoLogic(
     private fun hubDs(): MiHoYoDs {
         val salt = "AcpNVhfh0oedCobdCyFV8EE1jMOVDy9q"
         val time = System.currentTimeMillis() / 1000
-        val randomLetter = RandomUtils.letter(6)
+        val randomLetter = MyUtils.randomLetter(6)
         val md5 = "salt=$salt&t=$time&r=$randomLetter".md5()
         val ds = "$time,$randomLetter,$md5"
         return MiHoYoDs("2.60.1", "2", ds)
@@ -301,7 +335,7 @@ class MiHoYoLogic(
         val t = System.currentTimeMillis() / 1000
         val r = (100001..200000).random().toString()
         val q = params?.let { urlParams -> urlEncode(urlParams) } ?: ""
-        val b = data?.let { Jackson.writeValueAsString(it) } ?: "{}"
+        val b = data?.let { Jackson.toJsonString(it) } ?: "{}"
         val c = "salt=$salt&t=$t&r=$r&b=$b&q=$q".md5()
         val ds = "$t,$r,$c"
         return MiHoYoDs("2.60.1", "2", ds)
@@ -310,7 +344,7 @@ class MiHoYoLogic(
     private fun ds(): MiHoYoDs {
         val salt = "JwYDpKvLj6MrMqqYU6jTKF17KNO2PXoS"
         val time = System.currentTimeMillis() / 1000
-        val randomLetter = RandomUtils.letter(6)
+        val randomLetter = MyUtils.randomLetter(6)
         val md5 = "salt=$salt&t=$time&r=$randomLetter".md5()
         val ds = "$time,$randomLetter,$md5"
         return MiHoYoDs("2.63.1", "5", ds)
@@ -320,7 +354,7 @@ class MiHoYoLogic(
         val salt = "JwYDpKvLj6MrMqqYU6jTKF17KNO2PXoS"
         val t = System.currentTimeMillis() / 1000
         val r = (100001..200000).random().toString()
-        val b = data?.let { Jackson.writeValueAsString(it) } ?: "{}"
+        val b = data?.let { Jackson.toJsonString(it) } ?: "{}"
         val q = params?.let { urlParams -> urlEncode(urlParams) } ?: ""
         val c = "salt=$salt&t=$t&r=$r&b=$b&q=$q".md5()
         val ds = "$t,$r,$c"
@@ -331,18 +365,18 @@ class MiHoYoLogic(
         return params.map { (key, value) -> "$key=$value" }.joinToString("&")
     }
 
-    private suspend fun sign(miHoYoEntity: MiHoYoEntity, jsonNode: JsonNode, geeTest: GeeTest? = null): JsonNode {
+    private suspend fun sign(miHoYoEntity: MiHoYoEntity, jsonNode: JsonNode, rrOcrResult: RrOcrResult? = null): JsonNode {
         return client.post("https://api-takumi.mihoyo.com/event/luna/sign") {
             setJsonBody("""
-                    {"act_id":"e202311201442471","region":"${jsonNode["region"].asText()}","uid":"${jsonNode["game_uid"].asText()}","lang":"zh-cn"}
+                    {"act_id":"e202311201442471","region":"${jsonNode["region"].asText()}","uid":"${jsonNode.getString("game_uid")}","lang":"zh-cn"}
                 """.trimIndent())
             miHoYoEntity.fix.appAppend()
             headers {
                 cookieString(miHoYoEntity.cookie)
                 append("x-rpc-signgame", "hk4e")
-                geeTest?.let {
+                rrOcrResult?.let {
                     append("x-rpc-validate", it.validate)
-                    append("x-rpc-seccode", it.secCode)
+                    append("x-rpc-seccode", "${it.validate}|jordan")
                     append("x-rpc-challenge", it.challenge)
                 }
             }
@@ -350,21 +384,20 @@ class MiHoYoLogic(
     }
 
     suspend fun sign(miHoYoEntity: MiHoYoEntity, tgId: Long? = null) {
-        val ssJsonNode = client.get("https://api-takumi.mihoyo.com/binding/api/getUserGameRolesByCookie?game_biz=hk4e_cn") {
-            cookieString(miHoYoEntity.cookie)
-        }.body<JsonNode>()
-        if (ssJsonNode["retcode"].asInt() != 0) error(ssJsonNode["message"].asText())
+        val ssJsonNode = OkHttpKtUtils.getJson("https://api-takumi.mihoyo.com/binding/api/getUserGameRolesByCookie?game_biz=hk4e_cn",
+            OkUtils.cookie(miHoYoEntity.cookie))
+        if (ssJsonNode.getInteger("retcode") != 0) error(ssJsonNode.getString("message"))
         val jsonArray = ssJsonNode["data"]["list"]
         if (jsonArray.size() == 0) error("您还没有原神角色！！")
         for (obj in jsonArray) {
             val jsonNode = sign(miHoYoEntity, obj)
-            when (jsonNode["retcode"].asInt()) {
+            when (jsonNode.getInteger("retcode")) {
                 0, -5003 -> {
                     val data = jsonNode["data"]
-                    val gt = data["gt"]?.asText() ?: ""
+                    val gt = data["gt"].asText()
                     if (gt.isNotEmpty()) {
                         val challenge = data["challenge"].asText()
-                        val rr = twoCaptchaLogic.geeTest(gt, challenge, "https://webstatic.mihoyo.com/", tgId = tgId)
+                        val rr = geeTestLogic.rr(gt, "https://webstatic.mihoyo.com/", challenge, tgId = tgId)
                         val node = sign(miHoYoEntity, obj, rr)
                         if (node["retcode"].asInt() !in listOf(-5003, 0)) error(jsonNode["message"].asText())
                     }
@@ -419,7 +452,7 @@ class MiHoYoLogic(
         val data = jsonNode["data"]
         val challenge = data["challenge"].asText()
         val gt = data["gt"].asText()
-        val rr = twoCaptchaLogic.geeTest(gt, challenge, "https://bbs.mihoyo.com", tgId = miHoYoEntity.tgId)
+        val rr = geeTestLogic.rr(gt, "https://bbs.mihoyo.com", challenge, tgId = miHoYoEntity.tgId)
         val verifyJsonNode = client.post("https://bbs-api.miyoushe.com/misc/api/verifyVerification") {
             miHoYoEntity.fix.hubNewAppend()
             cookieString(miHoYoEntity.hubCookie())
@@ -452,7 +485,7 @@ class MiHoYoLogic(
         }
     }
 
-    suspend fun sToken(miHoYoEntity: MiHoYoEntity): String {
+    private suspend fun sToken(miHoYoEntity: MiHoYoEntity): String {
         val ticket = miHoYoEntity.ticket.ifEmpty { error("请重新使用账号或密码登陆") }
         val accountId = miHoYoEntity.aid.ifEmpty { error("请重新使用账号或密码登陆") }
         val jsonNode = client.get("https://api-takumi.mihoyo.com/auth/api/getMultiTokenByLoginTicket?login_ticket=$ticket&token_types=3&uid=$accountId")
@@ -478,7 +511,7 @@ class MiHoYoLogic(
 class MiHoYoFix {
     var referer: String = "https://user.miyoushe.com/"
     @JsonProperty("X-Rpc-Device_fp")
-    var fp: String = RandomUtils.letter(13)
+    var fp: String = MyUtils.randomLetterLowerNum(13)
     @JsonProperty("X-Rpc-Device_id")
     var device: String = UUID.randomUUID().toString()
     @JsonProperty("User-Agent")

@@ -16,15 +16,11 @@ class BotConfigEntity {
     var blacklist: MutableList<Long> = mutableListOf()
     var admins: MutableList<Long> = mutableListOf()
     var pushUrl: String = ""
+    // 公用
+    var rrOcrKey: String = ""
     var twoCaptchaKey: String = ""
 
     var updatePush: Status = Status.OFF
-
-    var openaiToken: String = ""
-    var openaiUrl: String = ""
-    var openaiModel: String = ""
-
-    fun twoCaptchaKey() = twoCaptchaKey.ifEmpty { null }
 }
 
 
@@ -43,8 +39,6 @@ class BotConfigService(
     suspend fun findByToken(token: String) = botConfigRepository.findByToken(token)
 
     suspend fun save(entity: BotConfigEntity) = botConfigRepository.save(entity)
-
-    suspend fun find() = init()
 
     suspend fun init(): BotConfigEntity {
         val token = telegramConfig.token
